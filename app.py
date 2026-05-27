@@ -138,6 +138,140 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ==========================================================
+# 고대비 UI 보정: 하얀 배경/하얀 글자 문제 방지
+# ==========================================================
+st.markdown("""
+<style>
+/* 전체 화면은 밝게, 글자는 진하게 고정 */
+html, body, .stApp, .block-container, section.main {
+    background:#f3f6fb !important;
+    color:#0f172a !important;
+}
+section.main p, section.main span, section.main label, section.main div,
+section.main h1, section.main h2, section.main h3, section.main h4,
+section.main li, section.main th, section.main td {
+    color:#0f172a !important;
+}
+section.main .small-muted, section.main .asset-symbol, section.main .kpi-label,
+section.main .kpi-sub, section.main .plan-label {
+    color:#475569 !important;
+}
+
+/* 카드와 입력 영역 구분 강화 */
+.section-card, .asset-header, .trade-panel, .chart-shell,
+[data-testid="stMetric"], [data-testid="stDataFrame"], .stPlotlyChart,
+.kpi-card, .plan-item, .metric-card, .info-card {
+    background:#ffffff !important;
+    border:1px solid #cbd5e1 !important;
+    box-shadow:0 10px 26px rgba(15,23,42,.08) !important;
+}
+
+/* 상단 메뉴/라디오 버튼: 선택/비선택 색 확실하게 */
+div[role="radiogroup"] {
+    gap:10px !important;
+}
+div[role="radiogroup"] label {
+    background:#ffffff !important;
+    border:1px solid #cbd5e1 !important;
+    border-radius:999px !important;
+    padding:9px 15px !important;
+    box-shadow:0 6px 14px rgba(15,23,42,.06) !important;
+}
+div[role="radiogroup"] label,
+div[role="radiogroup"] label * {
+    color:#0f172a !important;
+    font-weight:800 !important;
+}
+div[role="radiogroup"] label:has(input:checked) {
+    background:#2563eb !important;
+    border-color:#2563eb !important;
+    box-shadow:0 10px 24px rgba(37,99,235,.24) !important;
+}
+div[role="radiogroup"] label:has(input:checked),
+div[role="radiogroup"] label:has(input:checked) * {
+    color:#ffffff !important;
+}
+
+/* 기본 입력창은 무조건 흰 배경 + 진한 글자 */
+[data-baseweb="input"], [data-baseweb="select"] > div, textarea,
+.stTextInput input, .stNumberInput input {
+    background:#ffffff !important;
+    color:#0f172a !important;
+    -webkit-text-fill-color:#0f172a !important;
+    border:1px solid #cbd5e1 !important;
+}
+[data-baseweb="input"] *, [data-baseweb="select"] *, textarea * {
+    color:#0f172a !important;
+    -webkit-text-fill-color:#0f172a !important;
+}
+
+/* 사이드바: 어두운 배경 + 라벨은 밝게, 입력값은 흰 배경에 진한 글자 */
+[data-testid="stSidebar"] {
+    background:linear-gradient(180deg,#07111f 0%,#0f172a 55%,#111827 100%) !important;
+}
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] label,
+[data-testid="stSidebar"] span, [data-testid="stSidebar"] small {
+    color:#f8fafc !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] span {
+    color:#e2e8f0 !important;
+}
+[data-testid="stSidebar"] [data-baseweb="input"],
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] textarea,
+[data-testid="stSidebar"] .stTextInput input,
+[data-testid="stSidebar"] .stNumberInput input {
+    background:#ffffff !important;
+    border:1px solid rgba(255,255,255,.35) !important;
+    color:#0f172a !important;
+    -webkit-text-fill-color:#0f172a !important;
+}
+[data-testid="stSidebar"] [data-baseweb="input"] *,
+[data-testid="stSidebar"] [data-baseweb="select"] *,
+[data-testid="stSidebar"] textarea *,
+[data-testid="stSidebar"] input,
+[data-testid="stSidebar"] button svg,
+[data-testid="stSidebar"] [data-testid="stNumberInput"] button * {
+    color:#0f172a !important;
+    -webkit-text-fill-color:#0f172a !important;
+    fill:#0f172a !important;
+}
+[data-testid="stSidebar"] .stButton > button,
+[data-testid="stSidebar"] .stButton > button * {
+    color:#ffffff !important;
+    -webkit-text-fill-color:#ffffff !important;
+}
+
+/* 경고/정보 박스는 글자 대비 강화 */
+.stAlert, .stAlert * {
+    color:#0f172a !important;
+}
+
+/* 다크 신호 카드 내부는 예외적으로 밝은 글자 유지 */
+.terminal-card, .terminal-card div, .terminal-card span, .terminal-card p,
+.terminal-card b, .terminal-card .muted, .terminal-card .progress-head {
+    color:#e5e7eb !important;
+}
+.terminal-card {
+    background:linear-gradient(180deg,#0f172a,#111827) !important;
+    border:1px solid #334155 !important;
+}
+.terminal-card .badge-green { background:rgba(16,185,129,.18) !important; color:#34d399 !important; border-color:rgba(52,211,153,.35) !important; }
+.terminal-card .badge-blue { background:rgba(37,99,235,.18) !important; color:#93c5fd !important; border-color:rgba(147,197,253,.35) !important; }
+.terminal-card .badge-red { background:rgba(239,68,68,.18) !important; color:#fca5a5 !important; border-color:rgba(252,165,165,.35) !important; }
+.terminal-card .badge-gray { background:rgba(148,163,184,.18) !important; color:#cbd5e1 !important; border-color:rgba(203,213,225,.35) !important; }
+
+/* 데이터프레임 헤더와 본문 대비 */
+[data-testid="stDataFrame"] * {
+    color:#0f172a !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
 C = {
     "bg": "#f8fbff", "surface": "#ffffff", "border": "#e2e8f0", "text": "#0f172a", "subtext": "#64748b",
     "buy": "#10b981", "sell": "#ef4444", "warn": "#f59e0b", "blue": "#2563eb",
@@ -1305,7 +1439,7 @@ st.session_state.currency = "USD" if "달러" in currency_mode else "KRW"
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"<h3 style='color:{C['text']}'>📊 차트 디자인</h3>", unsafe_allow_html=True)
-chart_visual_theme = st.sidebar.selectbox("차트 테마", ["다크 차트", "라이트 차트", "미니멀 라이트"], index=0)
+chart_visual_theme = st.sidebar.selectbox("차트 테마", ["라이트 차트", "다크 차트", "미니멀 라이트"], index=0)
 chart_bars = st.sidebar.slider("차트 표시 봉 수", 80, 1000, 260, 20, help="최근 몇 개 봉만 차트에 표시할지 정합니다. 낮추면 더 빠르고 보기 쉽습니다.")
 ma_lines = st.sidebar.multiselect("이동평균선", ["MA5", "MA20", "MA60", "MA120", "MA200"], default=["MA5", "MA20", "MA60", "MA120"])
 aux_indicators = st.sidebar.multiselect("보조지표 패널", ["RSI", "MACD", "Stochastic", "ATR"], default=["RSI", "MACD"])
