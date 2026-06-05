@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
@@ -101,6 +102,9 @@ html, body, [class*="css"] {font-family: 'Pretendard', -apple-system, BlinkMacSy
 .kpi {background:#fff;border:1px solid #d8e0ea;border-radius:16px;padding:13px 14px;box-shadow:0 8px 20px rgba(15,23,42,.05);}
 .kpi-label {font-size:12px;color:#64748b;font-weight:800;}
 .kpi-value {font-size:21px;color:#0f172a;font-weight:900;margin-top:2px;}
+.kpi-unit {font-size:11px;color:#64748b;margin-top:3px;font-weight:700;}
+.scan-status {background:#ffffff;border:1px solid #d8e0ea;border-radius:14px;padding:12px 14px;margin:10px 0;color:#0f172a;}
+.scan-status b {color:#2563eb;}
 .progress-label {display:flex;justify-content:space-between;font-size:12px;font-weight:800;margin:8px 0 4px;color:#334155;}
 .progress-track {height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden;}
 .progress-bar {height:9px;border-radius:999px;background:linear-gradient(90deg,#2563eb,#10b981);}
@@ -296,6 +300,56 @@ def fmt_curr(v: float) -> str:
     if st.session_state.get("currency", "USD") == "KRW":
         return f"{sign}₩{v * EXCHANGE_RATE:,.0f}"
     return f"{sign}${v:,.2f}"
+
+
+def money_unit_label() -> str:
+    return "원" if st.session_state.get("currency", "USD") == "KRW" else "달러"
+
+
+def money_tick_settings() -> Dict[str, object]:
+    if st.session_state.get("currency", "USD") == "KRW":
+        return {"tickprefix": "₩", "tickformat": ",.0f"}
+    return {"tickprefix": "$", "tickformat": ",.2f"}
+
+
+def fmt_compact_number(v: float) -> str:
+    try:
+        v = float(v)
+    except Exception:
+        return "N/A"
+    sign = "-" if v < 0 else ""
+    v = abs(v)
+    if v >= 100000000:
+        return f"{sign}{v/100000000:.2f}억"
+    if v >= 10000:
+        return f"{sign}{v/10000:.2f}만"
+    return f"{sign}{v:,.0f}"
+
+
+def fmt_money_compact_usd(v: float) -> str:
+    if v is None or pd.isna(v):
+        return "N/A"
+    val = float(v)
+    if st.session_state.get("currency", "USD") == "KRW":
+        val *= EXCHANGE_RATE
+        prefix = "₩"
+    else:
+        prefix = "$"
+    sign = "-" if val < 0 else ""
+    val = abs(val)
+    if st.session_state.get("currency", "USD") == "KRW":
+        if val >= 100000000:
+            return f"{sign}{prefix}{val/100000000:.2f}억"
+        if val >= 10000:
+            return f"{sign}{prefix}{val/10000:.2f}만"
+        return f"{sign}{prefix}{val:,.0f}"
+    if val >= 1000000000:
+        return f"{sign}{prefix}{val/1000000000:.2f}B"
+    if val >= 1000000:
+        return f"{sign}{prefix}{val/1000000:.2f}M"
+    if val >= 1000:
+        return f"{sign}{prefix}{val/1000:.2f}K"
+    return f"{sign}{prefix}{val:,.2f}"
 
 
 def search_ticker_by_name(query: str, is_coin: bool = False) -> Optional[str]:
@@ -1103,21 +1157,58 @@ def make_chart(df: pd.DataFrame, pred_df: Optional[pd.DataFrame], buys: List[Dic
         legend=dict(orientation="h", y=1.01, x=0, font=dict(size=11)),
         font=dict(color=C["text"]),
     )
+    tick = money_tick_settings()
+    fig.update_yaxes(title_text=f"가격({money_unit_label()})", row=1, col=1, **tick)
+    fig.update_yaxes(title_text="거래량(주/개)", tickformat=",.2s", row=2, col=1)
+    fig.update_yaxes(title_text="RSI(0~100)", ticksuffix="", tickformat=".0f", row=3, col=1)
+    fig.update_yaxes(title_text="MACD", tickformat=".3f", row=4, col=1)
+    fig.update_xaxes(title_text="날짜", row=4, col=1)
     return fig
 
 
 def make_equity_chart(equity_df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
+    unit = money_unit_label()
+    tick = money_tick_settings()
+    mult = EXCHANGE_RATE if st.session_state.get("currency") == "KRW" else 1.0
     if equity_df is not None and not equity_df.empty:
         x = list(range(len(equity_df)))
-        fig.add_trace(go.Scatter(x=x, y=equity_df["equity"], mode="lines", fill="tozeroy", fillcolor="rgba(37,99,235,.08)", line=dict(color=C["blue"], width=2), name="자산"))
+        equity_values = equity_df["equity"] * mult
+        fig.add_trace(go.Scatter(
+            x=x,
+            y=equity_values,
+            mode="lines",
+            fill="tozeroy",
+            fillcolor="rgba(37,99,235,.08)",
+            line=dict(color=C["blue"], width=2),
+            name=f"자산({unit})",
+            hovertemplate="자산 %{y:,.2f}<extra></extra>",
+        ))
         roll = equity_df["equity"].cummax()
         dd = (equity_df["equity"] / roll - 1) * 100
-        fig.add_trace(go.Scatter(x=x, y=dd, yaxis="y2", line=dict(color=C["red"], width=1, dash="dot"), name="낙폭%"))
+        fig.add_trace(go.Scatter(
+            x=x,
+            y=dd,
+            yaxis="y2",
+            line=dict(color=C["red"], width=1, dash="dot"),
+            name="낙폭(%)",
+            hovertemplate="낙폭 %{y:.2f}%<extra></extra>",
+        ))
         step = max(1, len(x) // 6)
         fig.update_xaxes(tickmode="array", tickvals=x[::step], ticktext=equity_df["date"].astype(str).tolist()[::step])
-    fig.update_layout(template="plotly_white", height=300, margin=dict(l=8, r=8, t=16, b=8), yaxis2=dict(overlaying="y", side="right", showgrid=False), hovermode="x unified", legend=dict(orientation="h", y=1.05, x=0))
+    fig.update_layout(
+        template="plotly_white",
+        height=300,
+        margin=dict(l=8, r=8, t=16, b=8),
+        yaxis=dict(title=f"자산({unit})", gridcolor="#e2e8f0", **tick),
+        yaxis2=dict(title="낙폭(%)", overlaying="y", side="right", showgrid=False, ticksuffix="%"),
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.05, x=0),
+        font=dict(color=C["text"]),
+    )
     return fig
+
+
 
 # ============================================================
 # UI 구성
@@ -1224,6 +1315,85 @@ def analyze_symbol(symbol: str, interval: str, data_range: str, scan_mode: bool 
     return df, name, market, pred_df, latest, trades, equity, buys, sells, metrics, acc, acc_n
 
 
+def make_scan_config() -> StrategyConfig:
+    # 스캐너는 여러 종목을 반복 분석하므로 계산량이 큰 ARIMA/RF는 기본적으로 제외한다.
+    return StrategyConfig(
+        style=cfg.style,
+        horizon=cfg.horizon,
+        lookback=cfg.lookback,
+        train_window=min(cfg.train_window, 260),
+        min_prob=cfg.min_prob,
+        min_expected=cfg.min_expected,
+        min_score=cfg.min_score,
+        risk_penalty=cfg.risk_penalty,
+        market_filter=cfg.market_filter,
+        use_arima=False,
+        use_gb=cfg.use_gb,
+        use_rf=False,
+    )
+
+
+def analyze_symbol_for_scanner(symbol: str, interval: str, data_range: str) -> Dict:
+    row = {"종목": symbol, "이름": TICKER_NAME_MAP.get(symbol, symbol)}
+    try:
+        df_raw, name = fetch_ohlcv(symbol, interval, data_range)
+        row["이름"] = name or row["이름"]
+        min_len = max(cfg.lookback, 240) + cfg.horizon + 30
+        if df_raw is None or len(df_raw) < min_len:
+            row.update({"판단": "데이터 부족", "이유": "가격 데이터 부족"})
+            return row
+        df = calculate_indicators(df_raw)
+        market = get_market_regime(symbol, interval, data_range)
+        scan_cfg = make_scan_config()
+        latest = latest_prediction(df, scan_cfg, cost_cfg, market)
+        if latest is None:
+            row.update({"판단": "데이터 부족", "이유": "모델 학습 데이터 부족"})
+            return row
+        last = len(df) - 1
+        current = float(df.loc[last, "close"])
+        prev = float(df.loc[last - 1, "close"]) if last > 0 else current
+        day_pct = (current / prev - 1) * 100 if prev else 0.0
+        dollar_volume = float(df.loc[last, "close"] * df.loc[last, "volume"]) if "volume" in df else 0.0
+        row.update({
+            "판단": latest["grade"],
+            "이유": latest["reason"],
+            "현재가": fmt_curr(current),
+            "등락률": f"{day_pct:+.2f}%",
+            "상승확률": latest["prob"] * 100,
+            "예상수익률": latest["pred_return"] * 100,
+            "비용차감 기대수익": latest["expected"] * 100,
+            "종합점수": latest["final_score"] * 100,
+            "리스크": latest["risk"] * 100,
+            "거래량": fmt_compact_number(float(df.loc[last, "volume"])),
+            "거래대금": fmt_money_compact_usd(dollar_volume),
+            "시장": market.get("text", ""),
+        })
+        return row
+    except Exception as e:
+        row.update({"판단": "오류", "이유": str(e)[:120]})
+        return row
+
+
+def format_scan_output(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    order = {"강한 매수": 0, "매수 후보": 1, "관심": 2, "대기": 3, "회피": 4, "데이터 부족": 5, "오류": 6}
+    if "판단" in out:
+        out["rank"] = out["판단"].map(order).fillna(9)
+        sort_cols = ["rank"]
+        for col in ["종합점수", "비용차감 기대수익", "상승확률"]:
+            if col in out:
+                sort_cols.append(col)
+        out = out.sort_values(sort_cols, ascending=[True] + [False] * (len(sort_cols) - 1)).drop(columns=["rank"])
+    for col in ["상승확률", "예상수익률", "비용차감 기대수익", "종합점수", "리스크"]:
+        if col in out:
+            out[col] = out[col].map(lambda x: f"{float(x):+.2f}%" if col in ["예상수익률", "비용차감 기대수익"] and pd.notna(x) else (f"{float(x):.2f}%" if pd.notna(x) else ""))
+    preferred = ["판단", "종목", "이름", "현재가", "등락률", "상승확률", "예상수익률", "비용차감 기대수익", "종합점수", "리스크", "거래량", "거래대금", "시장", "이유"]
+    cols = [c for c in preferred if c in out.columns] + [c for c in out.columns if c not in preferred]
+    return out[cols]
+
+
 def badge_html(grade: str, reason: str) -> str:
     cls = "badge-wait"
     if grade in ["강한 매수", "매수 후보"]:
@@ -1290,18 +1460,20 @@ def render_order_plan(df: pd.DataFrame):
 def render_kpis(metrics: Dict, acc: float, acc_n: int):
     pf = "∞" if metrics.get("Profit Factor", 0) >= 999 else f"{metrics.get('Profit Factor', 0):.2f}"
     cards = [
-        ("총수익률", f"{metrics.get('총수익률', 0):+.2f}%"),
-        ("MDD", f"{metrics.get('MDD', 0):.2f}%"),
-        ("승률", f"{metrics.get('승률', 0):.1f}%"),
-        ("PF", pf),
-        ("Sharpe", f"{metrics.get('Sharpe', 0):.2f}"),
+        ("총수익률", f"{metrics.get('총수익률', 0):+.2f}%", "단위: %"),
+        ("최대낙폭 MDD", f"{metrics.get('MDD', 0):.2f}%", "단위: %"),
+        ("승률", f"{metrics.get('승률', 0):.1f}%", "단위: %"),
+        ("Profit Factor", pf, "총수익 ÷ 총손실"),
+        ("Sharpe", f"{metrics.get('Sharpe', 0):.2f}", "위험 대비 수익"),
     ]
     html = '<div class="kpi-grid">'
-    for label, value in cards:
-        html += f'<div class="kpi"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div></div>'
+    for label, value, unit in cards:
+        html += f'<div class="kpi"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div><div class="kpi-unit">{unit}</div></div>'
     html += '</div>'
     st.markdown(html, unsafe_allow_html=True)
     st.caption(f"거래횟수 {metrics.get('거래횟수',0)}회 · 방향 적중률 {acc:.1f}% · 검증표본 {acc_n}개")
+
+
 
 
 def render_manual_trade(asset_type: str, is_coin: bool, symbol: str, name: str, current: float):
@@ -1413,7 +1585,7 @@ def render_asset_page(asset_type: str, is_coin: bool, defaults: List[str], defau
 
 
 def render_scanner():
-    st.markdown('<div class="card"><p class="title">종목 스캐너</p><p class="sub">여러 종목을 같은 기준으로 빠르게 비교합니다.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card"><p class="title">종목 스캐너</p><p class="sub">여러 종목을 같은 기준으로 비교합니다. 스캐너는 멈추지 않도록 빠른 모델로 현재 매수 후보만 우선 판별합니다.</p></div>', unsafe_allow_html=True)
     scan_type = st.radio("대상", ["주식", "코인", "직접 입력"], horizontal=True)
     if scan_type == "주식":
         symbols = STOCK_SCAN_LIST
@@ -1422,48 +1594,54 @@ def render_scanner():
     else:
         raw = st.text_area("티커를 쉼표로 입력", "AAPL,NVDA,TSLA,BTC-USD,ETH-USD")
         symbols = [x.strip().upper() for x in raw.split(",") if x.strip()]
+
+    if not symbols:
+        st.warning("스캔할 종목이 없습니다. 티커를 하나 이상 입력하세요.")
+        return
+
     max_scan = st.slider("스캔 개수", 1, min(20, len(symbols)), min(8, len(symbols)))
     tf = st.selectbox("차트 주기", list(TIMEFRAME_MAP.keys()), index=0, key="scan_tf")
     interval, data_range = TIMEFRAME_MAP[tf]
+    selected_symbols = symbols[:max_scan]
+
+    st.caption("진행률은 완료 비율과 남은 비율을 같이 표시합니다. 네트워크가 느린 종목은 현재 종목명에서 잠시 머물 수 있습니다.")
+
     if st.button("스캔 실행", use_container_width=True):
-        rows = []
-        progress = st.progress(0)
-        for k, sym in enumerate(symbols[:max_scan]):
-            progress.progress((k + 1) / max_scan)
-            try:
-                df, name, market, pred_df, latest, trades, equity, buys, sells, metrics, acc, acc_n = analyze_symbol(sym, interval, data_range, scan_mode=True)
-                if df is None or latest is None:
-                    rows.append({"종목": sym, "이름": TICKER_NAME_MAP.get(sym, sym), "판단": "데이터 부족"})
-                    continue
-                rows.append({
-                    "종목": sym,
-                    "이름": name,
-                    "판단": latest["grade"],
-                    "이유": latest["reason"],
-                    "상승확률": latest["prob"] * 100,
-                    "기대수익": latest["expected"] * 100,
-                    "종합점수": latest["final_score"] * 100,
-                    "리스크": latest["risk"] * 100,
-                    "총수익률": metrics.get("총수익률", 0),
-                    "MDD": metrics.get("MDD", 0),
-                    "PF": metrics.get("Profit Factor", 0),
-                    "거래횟수": metrics.get("거래횟수", 0),
-                })
-            except Exception as e:
-                rows.append({"종목": sym, "이름": TICKER_NAME_MAP.get(sym, sym), "판단": "오류", "이유": str(e)[:80]})
-        out = pd.DataFrame(rows)
-        if not out.empty:
-            order = {"강한 매수": 0, "매수 후보": 1, "관심": 2, "대기": 3, "회피": 4, "데이터 부족": 5, "오류": 6}
-            if "판단" in out:
-                out["rank"] = out["판단"].map(order).fillna(9)
-                sort_cols = ["rank"]
-                if "종합점수" in out:
-                    sort_cols.append("종합점수")
-                out = out.sort_values(sort_cols, ascending=[True] + [False] * (len(sort_cols) - 1)).drop(columns=["rank"])
-            for col in ["상승확률", "기대수익", "종합점수", "리스크", "총수익률", "MDD", "PF"]:
-                if col in out:
-                    out[col] = out[col].map(lambda x: f"{x:.2f}" if pd.notna(x) else "")
-        st.dataframe(out, use_container_width=True, hide_index=True)
+        rows: List[Dict] = []
+        start_time = time.time()
+        progress = st.progress(0, text=f"0% 완료 · 100% 남음 · 0/{max_scan}개")
+        status_box = st.empty()
+        table_box = st.empty()
+
+        for k, sym in enumerate(selected_symbols):
+            done_before = k / max_scan
+            remain_before = 1 - done_before
+            status_box.markdown(
+                f'<div class="scan-status"><b>{k}/{max_scan}개 완료</b><br>현재 분석 중: <b>{sym}</b><br>완료 {done_before*100:.1f}% · 남음 {remain_before*100:.1f}%</div>',
+                unsafe_allow_html=True,
+            )
+            progress.progress(done_before, text=f"{done_before*100:.1f}% 완료 · {remain_before*100:.1f}% 남음 · {k}/{max_scan}개")
+
+            row = analyze_symbol_for_scanner(sym, interval, data_range)
+            rows.append(row)
+
+            done_after = (k + 1) / max_scan
+            remain_after = 1 - done_after
+            elapsed = time.time() - start_time
+            avg = elapsed / (k + 1)
+            eta = avg * (max_scan - k - 1)
+            progress.progress(done_after, text=f"{done_after*100:.1f}% 완료 · {remain_after*100:.1f}% 남음 · {k+1}/{max_scan}개")
+            status_box.markdown(
+                f'<div class="scan-status"><b>{k+1}/{max_scan}개 완료</b><br>최근 완료: <b>{sym}</b><br>완료 {done_after*100:.1f}% · 남음 {remain_after*100:.1f}% · 예상 남은 시간 {eta:.0f}초</div>',
+                unsafe_allow_html=True,
+            )
+            table_box.dataframe(format_scan_output(pd.DataFrame(rows)), use_container_width=True, hide_index=True)
+
+        progress.progress(1.0, text=f"100.0% 완료 · 0.0% 남음 · {max_scan}/{max_scan}개")
+        status_box.success(f"스캔 완료: {max_scan}개 분석 · 소요 시간 {time.time() - start_time:.1f}초")
+        table_box.dataframe(format_scan_output(pd.DataFrame(rows)), use_container_width=True, hide_index=True)
+
+
 
 # ============================================================
 # 메인
