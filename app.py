@@ -113,6 +113,60 @@ html, body, [class*="css"] {font-family: 'Pretendard', -apple-system, BlinkMacSy
 [data-testid="stDataFrame"] {border:1px solid #d8e0ea;border-radius:16px;overflow:hidden;}
 hr {border-color:#d8e0ea;}
 @media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.price{font-size:24px;}}
+
+/* 사이드바 입력값 단위 가독성 보강 */
+[data-testid="stSidebar"] [data-testid="stNumberInput"] input,
+[data-testid="stSidebar"] [data-testid="stSelectbox"] div,
+[data-testid="stSidebar"] [data-testid="stSlider"] div {font-variant-numeric: tabular-nums;}
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] .stCaption * {color:#cbd5e1 !important;font-size:12px !important;}
+[data-testid="stSidebar"] [data-testid="stNumberInput"] button {background:#ffffff !important;border-color:#e2e8f0 !important;}
+[data-testid="stSidebar"] [data-testid="stNumberInput"] button svg {fill:#0f172a !important;}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {background:#ffffff !important;}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] * {color:#0f172a !important;-webkit-text-fill-color:#0f172a !important;}
+
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# 표시 안정성 보정: 원화 표시 시 숫자 잘림 방지
+# ============================================================
+st.markdown(
+    """
+<style>
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] > div,
+[data-testid="stMetricValue"] [data-testid="stMarkdownContainer"],
+[data-testid="stMetricValue"] [data-testid="stMarkdownContainer"] p {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    max-width: none !important;
+    line-height: 1.18 !important;
+    font-size: clamp(18px, 2.0vw, 28px) !important;
+    letter-spacing: -0.035em !important;
+    word-break: keep-all !important;
+    overflow-wrap: anywhere !important;
+}
+[data-testid="stMetricDelta"],
+[data-testid="stMetricDelta"] * {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+.order-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px;}
+.order-item {background:#ffffff;border:1px solid #d8e0ea;border-radius:16px;padding:12px 13px;min-width:0;overflow:visible;box-shadow:0 8px 18px rgba(15,23,42,.04);}
+.order-label {color:#475569;font-size:13px;font-weight:850;margin-bottom:6px;}
+.order-value {color:#0f172a;font-size:clamp(20px, 2.25vw, 30px);font-weight:950;letter-spacing:-0.055em;line-height:1.12;white-space:normal;word-break:keep-all;overflow-wrap:anywhere;}
+.order-value.small-value {font-size:clamp(18px, 1.75vw, 25px);}
+.order-sub {margin-top:5px;color:#64748b;font-size:12px;line-height:1.35;word-break:keep-all;}
+.order-down { color:#dc2626 !important; }
+.order-up { color:#059669 !important; }
+.order-note {margin-top:10px;color:#64748b;font-size:12.5px;line-height:1.55;word-break:keep-all;}
+@media(max-width:900px){.order-grid{grid-template-columns:1fr;}.order-value{font-size:24px;}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -290,6 +344,23 @@ def sigmoid(x: float) -> float:
 
 def fmt_pct(x: float) -> str:
     return f"{x*100:+.2f}%"
+
+
+def parse_number_text(value: str, default: float = 0.0) -> float:
+    """
+    사이드바 입력칸에 10,000.00 $ 처럼 단위가 붙어 있어도 숫자만 안전하게 추출한다.
+    """
+    try:
+        text = str(value).replace(",", "").strip()
+        cleaned = "".join(ch for ch in text if ch.isdigit() or ch in [".", "-"])
+        if cleaned in ["", ".", "-", "-."]:
+            return default
+        num = float(cleaned)
+        if not np.isfinite(num):
+            return default
+        return num
+    except Exception:
+        return default
 
 
 def fmt_curr(v: float) -> str:
@@ -1219,16 +1290,17 @@ if st.sidebar.button("모의투자 초기화", use_container_width=True):
     reset_portfolio()
     st.rerun()
 
-currency_mode = st.sidebar.radio("통화", ["달러", "원"], horizontal=True)
-st.session_state.currency = "KRW" if currency_mode == "원" else "USD"
+currency_mode = st.sidebar.radio("표시 통화", ["달러 ($)", "원 (₩)"], horizontal=True)
+st.session_state.currency = "KRW" if "원" in currency_mode else "USD"
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 예측 설정")
 style = st.sidebar.selectbox("예측 스타일", ["안전형", "균형형", "공격형"], index=1)
-forecast_horizon = st.sidebar.selectbox("예측 기간", [3, 5, 10, 20], index=1)
-chart_bars = st.sidebar.slider("차트 표시 봉 수", 80, 800, 260, 20)
+forecast_horizon = st.sidebar.selectbox("예측 기간", [3, 5, 10, 20], index=1, format_func=lambda v: f"{v}봉")
+chart_bars = st.sidebar.slider("차트 표시 봉 수", 80, 800, 260, 20, format="%d봉")
 show_bb = st.sidebar.checkbox("볼린저밴드 표시", value=True)
 use_arima = st.sidebar.checkbox("ARIMA 보조모델 사용", value=False, disabled=not STATSMODELS_AVAILABLE)
+st.sidebar.caption("예측 기간은 몇 개의 봉 뒤를 볼지 뜻합니다. 예: 5봉 = 현재 봉 기준 5개 봉 뒤.")
 
 style_defaults = {
     "안전형": {"min_prob": 0.62, "min_expected": 0.015, "min_score": 0.66, "risk_penalty": 1.10, "use_gb": False, "use_rf": False},
@@ -1238,9 +1310,9 @@ style_defaults = {
 sp = style_defaults[style]
 
 with st.sidebar.expander("고급 예측 기준", expanded=False):
-    min_prob = st.slider("최소 상승확률", 0.50, 0.90, float(sp["min_prob"]), 0.01)
-    min_expected = st.slider("최소 기대수익", 0.0, 8.0, float(sp["min_expected"] * 100), 0.1) / 100
-    min_score = st.slider("최소 종합점수", 0.30, 0.95, float(sp["min_score"]), 0.01)
+    min_prob = st.slider("최소 상승확률", 50, 90, int(round(sp["min_prob"] * 100)), 1, format="%d%%") / 100
+    min_expected = st.slider("최소 기대수익", 0.0, 8.0, float(sp["min_expected"] * 100), 0.1, format="%.1f%%") / 100
+    min_score = st.slider("최소 종합점수", 30, 95, int(round(sp["min_score"] * 100)), 1, format="%d%%") / 100
     use_market_filter = st.checkbox("시장 흐름 필터", value=True)
     use_gb = st.checkbox("비선형 회귀모델 추가", value=bool(sp["use_gb"]))
     use_rf = st.checkbox("상승확률 보조모델 추가", value=bool(sp["use_rf"]))
@@ -1270,22 +1342,26 @@ cfg = StrategyConfig(
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 매매 관리")
-start_capital = st.sidebar.number_input("시작자산", min_value=100.0, value=10000.0, step=100.0)
+raw_start_capital = st.sidebar.text_input("시작 자산", value="10,000.00 $", help="뒤의 $ 기호는 단위 표시입니다. 숫자만 바꿔도 됩니다.")
+start_capital = max(100.0, parse_number_text(raw_start_capital, 10000.0))
+st.sidebar.caption(f"적용값: {start_capital:,.2f} $ · 원화 표시는 결과 화면에서 환율을 적용합니다.")
 risk_per_trade = st.sidebar.slider("1회 손실 한도", 0.2, 3.0, 1.0, 0.1, format="%.1f%%") / 100
 max_position = st.sidebar.slider("최대 투입 비중", 5.0, 100.0, 30.0, 5.0, format="%.0f%%") / 100
 stop_pct = st.sidebar.slider("손절폭", 1.0, 20.0, 5.0, 0.5, format="%.1f%%") / 100
 take_profit = st.sidebar.slider("익절 목표", 2.0, 40.0, 12.0, 0.5, format="%.1f%%") / 100
 trailing_stop = st.sidebar.slider("추적손절", 0.0, 20.0, 6.0, 0.5, format="%.1f%%") / 100
+st.sidebar.caption("손절폭·익절 목표·추적손절은 모두 진입가 기준 비율입니다.")
 ma_exit = st.sidebar.selectbox("추세 이탈 매도", ["MA20 이탈", "MA60 이탈", "사용 안 함"], index=0)
 with st.sidebar.expander("시간청산 옵션", expanded=False):
     use_time_stop = st.checkbox("시간청산 사용", value=False)
-    max_hold_bars = st.slider("최대 보유 봉 수", 20, 400, 160, 10)
+    max_hold_bars = st.slider("최대 보유 봉 수", 20, 400, 160, 10, format="%d봉")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 거래비용")
 fee_pct = st.sidebar.slider("수수료", 0.0, 1.0, 0.05, 0.01, format="%.2f%%") / 100
 slippage_pct = st.sidebar.slider("슬리피지", 0.0, 1.0, 0.08, 0.01, format="%.2f%%") / 100
 sell_tax_pct = st.sidebar.slider("매도세/기타", 0.0, 1.0, 0.00, 0.01, format="%.2f%%") / 100
+st.sidebar.caption("거래비용은 매수·매도 체결 시 백테스트 수익률에서 차감됩니다.")
 
 cost_cfg = CostConfig(fee_pct, slippage_pct, sell_tax_pct)
 risk_cfg = RiskConfig(start_capital, risk_per_trade, max_position, stop_pct, take_profit, trailing_stop, ma_exit, use_time_stop, max_hold_bars)
@@ -1441,21 +1517,65 @@ def render_order_plan(df: pd.DataFrame):
     if df is None or df.empty:
         st.markdown('</div>', unsafe_allow_html=True)
         return
+
     close = float(df["close"].iloc[-1])
     stop = close * (1 - risk_cfg.stop_pct)
     target = close * (1 + risk_cfg.take_profit_pct)
     qty, used = calc_position_size(risk_cfg.start_capital, close, stop, risk_cfg)
     rr = (target - close) / max(close - stop, 1e-9)
-    c1, c2 = st.columns(2)
-    c1.metric("진입가", fmt_curr(close))
-    c2.metric("손익비", f"1:{rr:.2f}")
-    c1.metric("손절가", fmt_curr(stop), f"-{risk_cfg.stop_pct*100:.1f}%")
-    c2.metric("목표가", fmt_curr(target), f"+{risk_cfg.take_profit_pct*100:.1f}%")
-    c1.metric("권장 수량", f"{qty:,.4f}")
-    c2.metric("예상 투입", fmt_curr(used))
-    st.caption("수량은 1회 손실 한도와 최대 투입 비중을 기준으로 계산됩니다.")
-    st.markdown('</div>', unsafe_allow_html=True)
 
+    def money_pair(v: float):
+        full = fmt_curr(v)
+        compact = fmt_money_compact_usd(v)
+        if st.session_state.get("currency", "USD") == "KRW" and compact != full:
+            return full, f"약 {compact}"
+        return full, ""
+
+    entry_full, entry_sub = money_pair(close)
+    stop_full, stop_sub = money_pair(stop)
+    target_full, target_sub = money_pair(target)
+    used_full, used_sub = money_pair(used)
+
+    html = f"""
+    <div class="order-grid">
+        <div class="order-item">
+            <div class="order-label">진입가</div>
+            <div class="order-value">{entry_full}</div>
+            <div class="order-sub">1주 또는 1개 기준 {entry_sub}</div>
+        </div>
+        <div class="order-item">
+            <div class="order-label">손익비</div>
+            <div class="order-value small-value">1 : {rr:.2f}</div>
+            <div class="order-sub">위험 1 대비 기대 보상</div>
+        </div>
+        <div class="order-item">
+            <div class="order-label">손절가</div>
+            <div class="order-value order-down">{stop_full}</div>
+            <div class="order-sub">진입가 대비 -{risk_cfg.stop_pct*100:.1f}% {stop_sub}</div>
+        </div>
+        <div class="order-item">
+            <div class="order-label">목표가</div>
+            <div class="order-value order-up">{target_full}</div>
+            <div class="order-sub">진입가 대비 +{risk_cfg.take_profit_pct*100:.1f}% {target_sub}</div>
+        </div>
+        <div class="order-item">
+            <div class="order-label">권장 수량</div>
+            <div class="order-value small-value">{qty:,.4f}</div>
+            <div class="order-sub">단위: 주 또는 개</div>
+        </div>
+        <div class="order-item">
+            <div class="order-label">예상 투입</div>
+            <div class="order-value">{used_full}</div>
+            <div class="order-sub">총 매수 금액 {used_sub}</div>
+        </div>
+    </div>
+    <div class="order-note">
+        수량은 1회 손실 한도와 최대 투입 비중을 기준으로 계산됩니다.<br>
+        원화 표시는 전체 금액을 먼저 보여주고 큰 금액은 만 원 또는 억 원 단위 보조 표시를 함께 제공합니다.
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 def render_kpis(metrics: Dict, acc: float, acc_n: int):
     pf = "∞" if metrics.get("Profit Factor", 0) >= 999 else f"{metrics.get('Profit Factor', 0):.2f}"
@@ -1487,7 +1607,8 @@ def render_manual_trade(asset_type: str, is_coin: bool, symbol: str, name: str, 
     b.metric("보유수량", f"{st.session_state[share_key][symbol]:.4f}")
     step = 1.0 if is_korean_ticker(symbol) and not is_coin else 0.01
     with c:
-        amount = st.number_input("수량", min_value=0.0001, value=1.0 if step == 1.0 else 0.1, step=step, key=f"amt_{asset_type}")
+        amount = st.number_input("수량 (주/개)", min_value=0.0001, value=1.0 if step == 1.0 else 0.1, step=step, format="%.4f", key=f"amt_{asset_type}")
+        st.caption("단위: 주/개")
     b1, b2 = st.columns(2)
     with b1:
         if st.button("매수", use_container_width=True, key=f"buy_{asset_type}"):
@@ -1599,7 +1720,7 @@ def render_scanner():
         st.warning("스캔할 종목이 없습니다. 티커를 하나 이상 입력하세요.")
         return
 
-    max_scan = st.slider("스캔 개수", 1, min(20, len(symbols)), min(8, len(symbols)))
+    max_scan = st.slider("스캔 개수", 1, min(20, len(symbols)), min(8, len(symbols)), format="%d개")
     tf = st.selectbox("차트 주기", list(TIMEFRAME_MAP.keys()), index=0, key="scan_tf")
     interval, data_range = TIMEFRAME_MAP[tf]
     selected_symbols = symbols[:max_scan]
