@@ -5,8 +5,9 @@
 - 수학적 모델: Ridge 회귀, Logistic 회귀, Gradient Boosting, Random Forest, 선택형 ARIMA
 - 예측: 미래 수익률, 상승확률, 종합점수
 - 검증: 거래비용, 슬리피지, 손절, 익절, 추적손절, 추세이탈, MDD, PF, Sharpe
+- 장중 실시간 갱신: 1분봉 지원 및 장중 자동 새로고침
 
-주의: 이 프로그램은 교육·연구·모의투자용입니다. 실제 수익을 보장하지 않습니다.
+주의: 이 프로그램은 교육·연구용입니다. 실제 수익을 보장하지 않습니다.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ import os
 import time
 import warnings
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time as dt_time
+from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -51,8 +53,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-APP_STATE_FILE = "local_portfolio.json"
 
 C = {
     "bg": "#f5f7fb",
@@ -125,6 +125,15 @@ hr {border-color:#d8e0ea;}
 [data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {background:#ffffff !important;}
 [data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] * {color:#0f172a !important;-webkit-text-fill-color:#0f172a !important;}
 
+
+.live-row {display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0 10px;}
+.live-pill {display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 11px;font-size:12px;font-weight:900;border:1px solid #334155;background:#111827;color:#e5e7eb;}
+.live-open {background:rgba(16,185,129,.12);color:#34d399;border-color:rgba(52,211,153,.35);}
+.live-closed {background:rgba(148,163,184,.13);color:#cbd5e1;border-color:rgba(203,213,225,.25);}
+.live-warn {background:rgba(245,158,11,.12);color:#fbbf24;border-color:rgba(251,191,36,.35);}
+.chart-guide {background:#0f172a;border:1px solid #263244;color:#cbd5e1;border-radius:14px;padding:10px 12px;margin-bottom:10px;font-size:12.5px;line-height:1.55;}
+.chart-guide b {color:#f8fafc;}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -167,6 +176,34 @@ st.markdown(
 .order-up { color:#059669 !important; }
 .order-note {margin-top:10px;color:#64748b;font-size:12.5px;line-height:1.55;word-break:keep-all;}
 @media(max-width:900px){.order-grid{grid-template-columns:1fr;}.order-value{font-size:24px;}}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+st.markdown(
+    """
+<style>
+/* 트레이딩 앱 스타일 차트 보정 */
+.stPlotlyChart {
+    background:#0b1120 !important;
+    border:1px solid #1e293b !important;
+    border-radius:18px !important;
+    padding:6px !important;
+    box-shadow:0 18px 38px rgba(2,6,23,.18) !important;
+}
+.chart-guide {
+    background:#0b1120;
+    color:#cbd5e1;
+    border:1px solid #1e293b;
+    border-radius:14px;
+    padding:10px 12px;
+    margin-bottom:8px;
+    font-size:12px;
+    line-height:1.55;
+}
+.chart-guide b {color:#ffffff;}
 </style>
 """,
     unsafe_allow_html=True,
@@ -219,11 +256,101 @@ STOCK_SCAN_LIST = ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "GOOGL", "META", "005
 COIN_SCAN_LIST = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD", "BNB-USD", "ADA-USD", "AVAX-USD"]
 
 TIMEFRAME_MAP = {
+    "1분봉": ("1m", "7d"),
     "일봉": ("1d", "5y"),
     "1시간봉": ("1h", "730d"),
     "30분봉": ("30m", "60d"),
     "15분봉": ("15m", "60d"),
 }
+
+REALTIME_TIMEFRAMES = {"1분봉", "15분봉", "30분봉", "1시간봉"}
+
+
+def safe_now(tz_name: str) -> datetime:
+    """timezone DB가 있는 환경에서는 해당 시장 시간, 실패하면 서버 시간을 사용한다."""
+    try:
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        return datetime.now()
+
+
+def market_clock(symbol: str) -> Dict[str, object]:
+    """
+    장중 자동 갱신 여부 판단용 간단 시장 시계.
+    주말과 정규장 시간만 반영한다. 공휴일과 조기폐장은 거래소 휴장 캘린더 API가 없으므로 반영하지 않는다.
+    """
+    if symbol.endswith("-USD"):
+        now = safe_now("UTC")
+        return {
+            "open": True,
+            "market": "코인",
+            "timezone": "UTC",
+            "now": now,
+            "label": "코인 시장 24시간",
+            "detail": f"UTC {now.strftime('%Y-%m-%d %H:%M')}",
+        }
+
+    if is_korean_ticker(symbol):
+        now = safe_now("Asia/Seoul")
+        open_time = dt_time(9, 0)
+        close_time = dt_time(15, 30)
+        is_open = now.weekday() < 5 and open_time <= now.time() < close_time
+        return {
+            "open": bool(is_open),
+            "market": "국장",
+            "timezone": "Asia/Seoul",
+            "now": now,
+            "label": "국장 정규장" if is_open else "국장 장마감",
+            "detail": f"한국시간 {now.strftime('%Y-%m-%d %H:%M')} · 정규장 09:00~15:30",
+        }
+
+    now = safe_now("America/New_York")
+    open_time = dt_time(9, 30)
+    close_time = dt_time(16, 0)
+    is_open = now.weekday() < 5 and open_time <= now.time() < close_time
+    return {
+        "open": bool(is_open),
+        "market": "미장",
+        "timezone": "America/New_York",
+        "now": now,
+        "label": "미장 정규장" if is_open else "미장 장마감",
+        "detail": f"뉴욕시간 {now.strftime('%Y-%m-%d %H:%M')} · 정규장 09:30~16:00",
+    }
+
+
+def render_live_status(symbol: str, timeframe_label: str) -> Dict[str, object]:
+    clock = market_clock(symbol)
+    realtime_tf = timeframe_label in REALTIME_TIMEFRAMES
+    can_refresh = bool(clock.get("open")) and realtime_tf and bool(globals().get("auto_refresh_enabled", True))
+    refresh_sec = int(globals().get("auto_refresh_seconds", 60))
+
+    if can_refresh:
+        # Streamlit 기본 기능만 사용하기 위해 meta refresh로 전체 앱을 주기적으로 새로고침한다.
+        st.markdown(f"<meta http-equiv='refresh' content='{refresh_sec}'>", unsafe_allow_html=True)
+        status_cls = "live-open"
+        status_text = f"실시간 갱신 ON · {refresh_sec}초마다 새로고침"
+    elif not realtime_tf:
+        status_cls = "live-warn"
+        status_text = "실시간 갱신 대기 · 분봉 선택 시 장중 자동 갱신"
+    elif not bool(clock.get("open")):
+        status_cls = "live-closed"
+        status_text = "장마감 · 자동 새로고침 중지"
+    else:
+        status_cls = "live-closed"
+        status_text = "자동 새로고침 OFF"
+
+    st.markdown(
+        f"""
+        <div class="live-row">
+          <span class="live-pill {status_cls}">{status_text}</span>
+          <span class="live-pill">{clock.get('label')}</span>
+          <span class="live-pill">{clock.get('detail')}</span>
+          <span class="live-pill">데이터 갱신 기준: Yahoo Finance</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return clock
 
 # ============================================================
 # 설정 데이터 클래스
@@ -261,65 +388,6 @@ class StrategyConfig:
     use_arima: bool
     use_gb: bool
     use_rf: bool
-
-# ============================================================
-# 상태 저장
-# ============================================================
-
-def load_json(path: str, default):
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return default
-    return default
-
-
-def save_json(path: str, data) -> None:
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-def init_portfolio() -> None:
-    data = load_json(APP_STATE_FILE, {})
-    st.session_state.setdefault("stock_balance", data.get("stock_balance", 10000.0))
-    st.session_state.setdefault("coin_balance", data.get("coin_balance", 10000.0))
-    st.session_state.setdefault("stock_shares", data.get("stock_shares", {}))
-    st.session_state.setdefault("coin_shares", data.get("coin_shares", {}))
-    st.session_state.setdefault("stock_trade_log", data.get("stock_trade_log", []))
-    st.session_state.setdefault("coin_trade_log", data.get("coin_trade_log", []))
-
-
-def save_portfolio() -> None:
-    data = {
-        "stock_balance": st.session_state.get("stock_balance", 10000.0),
-        "coin_balance": st.session_state.get("coin_balance", 10000.0),
-        "stock_shares": st.session_state.get("stock_shares", {}),
-        "coin_shares": st.session_state.get("coin_shares", {}),
-        "stock_trade_log": st.session_state.get("stock_trade_log", []),
-        "coin_trade_log": st.session_state.get("coin_trade_log", []),
-    }
-    save_json(APP_STATE_FILE, data)
-
-
-def reset_portfolio() -> None:
-    for key in ["stock_balance", "coin_balance"]:
-        st.session_state[key] = 10000.0
-    for key in ["stock_shares", "coin_shares"]:
-        st.session_state[key] = {}
-    for key in ["stock_trade_log", "coin_trade_log"]:
-        st.session_state[key] = []
-    if os.path.exists(APP_STATE_FILE):
-        try:
-            os.remove(APP_STATE_FILE)
-        except Exception:
-            pass
-
-init_portfolio()
 
 # ============================================================
 # 유틸리티
@@ -468,7 +536,7 @@ def get_realtime_exchange_rate() -> float:
 
 EXCHANGE_RATE = get_realtime_exchange_rate()
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def fetch_ohlcv(symbol: str, interval: str, data_range: str) -> Tuple[Optional[pd.DataFrame], str]:
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={data_range}&interval={interval}"
     try:
@@ -570,7 +638,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["body_pct"] = (df["close"] - df["open"]) / df["open"].replace(0, np.nan)
     return df
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def get_market_regime(symbol: str, interval: str, data_range: str) -> Dict:
     if symbol.endswith("-USD"):
         proxy = "BTC-USD"
@@ -1145,97 +1213,223 @@ def visible_df(df: pd.DataFrame, bars: int) -> pd.DataFrame:
 
 
 def make_chart(df: pd.DataFrame, pred_df: Optional[pd.DataFrame], buys: List[Dict], sells: List[Dict], bars: int, show_bb: bool) -> go.Figure:
+    """트레이딩 앱처럼 보기 쉬운 다크 테마 차트."""
     dfp = visible_df(df, bars)
     if dfp.empty:
         fig = go.Figure()
-        fig.add_annotation(text="데이터 없음", x=0.5, y=0.5, showarrow=False)
+        fig.add_annotation(text="데이터 없음", x=0.5, y=0.5, showarrow=False, font=dict(color="#e2e8f0"))
+        fig.update_layout(template="plotly_dark", paper_bgcolor="#0b1120", plot_bgcolor="#0b1120", height=680)
         return fig
+
     start_idx = int(dfp.index.min())
     end_idx = int(dfp.index.max())
     mult = EXCHANGE_RATE if st.session_state.get("currency") == "KRW" else 1.0
+    unit = money_unit_label()
 
-    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.035, row_heights=[0.58, 0.16, 0.13, 0.13])
+    bg = "#0b1120"
+    panel = "#0f172a"
+    grid = "rgba(148,163,184,.18)"
+    text_color = "#e5e7eb"
+    muted = "#94a3b8"
+    up = "#22c55e"
+    down = "#ef4444"
+    blue = "#60a5fa"
+    orange = "#f59e0b"
+    purple = "#a78bfa"
+    cyan = "#22d3ee"
+
+    fig = make_subplots(
+        rows=4,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.018,
+        row_heights=[0.62, 0.16, 0.11, 0.11],
+        specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}]],
+    )
+
     x = dfp.index.tolist()
-    fig.add_trace(go.Candlestick(
-        x=x,
-        open=dfp["open"] * mult,
-        high=dfp["high"] * mult,
-        low=dfp["low"] * mult,
-        close=dfp["close"] * mult,
-        name="가격",
-        text=dfp["date"],
-        increasing_line_color=C["green"],
-        increasing_fillcolor=C["green"],
-        decreasing_line_color=C["red"],
-        decreasing_fillcolor=C["red"],
-    ), row=1, col=1)
+    dates = dfp["date"].astype(str).tolist()
 
-    if show_bb:
-        fig.add_trace(go.Scatter(x=x, y=dfp["bb_upper"] * mult, line=dict(color="rgba(124,58,237,.45)", width=1), name="BB 상단"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=x, y=dfp["bb_lower"] * mult, fill="tonexty", fillcolor="rgba(124,58,237,.06)", line=dict(color="rgba(124,58,237,.45)", width=1), name="BB 하단"), row=1, col=1)
+    fig.add_trace(
+        go.Candlestick(
+            x=x,
+            open=dfp["open"] * mult,
+            high=dfp["high"] * mult,
+            low=dfp["low"] * mult,
+            close=dfp["close"] * mult,
+            name="캔들",
+            text=dates,
+            increasing_line_color=up,
+            increasing_fillcolor=up,
+            decreasing_line_color=down,
+            decreasing_fillcolor=down,
+            whiskerwidth=0.45,
+            hovertemplate=(
+                "%{text}<br>"
+                "시가 %{open:,.2f}<br>"
+                "고가 %{high:,.2f}<br>"
+                "저가 %{low:,.2f}<br>"
+                "종가 %{close:,.2f}<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
+    )
 
-    for col, name, color in [("ma5", "MA5", C["orange"]), ("ma20", "MA20", C["cyan"]), ("ma60", "MA60", "#f97316"), ("ma120", "MA120", C["purple"])]:
-        fig.add_trace(go.Scatter(x=x, y=dfp[col] * mult, line=dict(color=color, width=1.3), name=name), row=1, col=1)
+    if show_bb and {"bb_upper", "bb_lower"}.issubset(dfp.columns):
+        fig.add_trace(go.Scatter(x=x, y=dfp["bb_upper"] * mult, line=dict(color="rgba(167,139,250,.48)", width=1), name="볼린저 상단", hoverinfo="skip"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=x, y=dfp["bb_lower"] * mult, fill="tonexty", fillcolor="rgba(167,139,250,.08)", line=dict(color="rgba(167,139,250,.48)", width=1), name="볼린저 하단", hoverinfo="skip"), row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=x, y=dfp["vwap"] * mult, line=dict(color="#8b5cf6", width=1, dash="dot"), name="VWAP"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=x, y=dfp["support60"] * mult, line=dict(color="rgba(16,185,129,.60)", width=1, dash="dash"), name="지지"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=x, y=dfp["resistance60"] * mult, line=dict(color="rgba(239,68,68,.60)", width=1, dash="dash"), name="저항"), row=1, col=1)
+    ma_specs = [("ma5", "MA5", orange, 1.2), ("ma20", "MA20", cyan, 1.6), ("ma60", "MA60", "#fb923c", 1.35), ("ma120", "MA120", purple, 1.35)]
+    for col, name, color, width in ma_specs:
+        if col in dfp:
+            fig.add_trace(go.Scatter(x=x, y=dfp[col] * mult, line=dict(color=color, width=width), name=name, hovertemplate=f"{name} %{{y:,.2f}}<extra></extra>"), row=1, col=1)
 
-    if pred_df is not None and not pred_df.empty:
+    if "vwap" in dfp:
+        fig.add_trace(go.Scatter(x=x, y=dfp["vwap"] * mult, line=dict(color="#e879f9", width=1.15, dash="dot"), name="VWAP", hovertemplate="VWAP %{y:,.2f}<extra></extra>"), row=1, col=1)
+    if "support60" in dfp:
+        fig.add_trace(go.Scatter(x=x, y=dfp["support60"] * mult, line=dict(color="rgba(34,197,94,.65)", width=1, dash="dash"), name="지지60", hoverinfo="skip"), row=1, col=1)
+    if "resistance60" in dfp:
+        fig.add_trace(go.Scatter(x=x, y=dfp["resistance60"] * mult, line=dict(color="rgba(239,68,68,.65)", width=1, dash="dash"), name="저항60", hoverinfo="skip"), row=1, col=1)
+
+    last_price = float(dfp["close"].iloc[-1]) * mult
+    fig.add_hline(
+        y=last_price,
+        row=1,
+        col=1,
+        line_width=1.1,
+        line_dash="dot",
+        line_color=muted,
+        annotation_text=f"현재가 {last_price:,.2f}",
+        annotation_position="top right",
+        annotation_font=dict(color=text_color, size=11),
+    )
+
+    # 백테스트 매수 후보 표시
+    if pred_df is not None and not pred_df.empty and {"idx", "prob", "final_score"}.issubset(pred_df.columns):
         cand = pred_df[(pred_df["idx"] >= start_idx) & (pred_df["idx"] <= end_idx) & (pred_df["prob"] >= 0.58) & (pred_df["final_score"] >= 0.58)]
         if not cand.empty:
-            ids = cand["idx"].astype(int).tolist()
-            ids = [i for i in ids if i in df.index]
+            ids = [int(i) for i in cand["idx"].tolist() if int(i) in df.index]
             if ids:
-                fig.add_trace(go.Scatter(x=ids, y=df.loc[ids, "low"] * 0.975 * mult, mode="markers", marker=dict(size=8, color=C["blue"], symbol="circle", line=dict(color="#fff", width=1)), name="예측 후보"), row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=ids,
+                    y=df.loc[ids, "low"] * 0.975 * mult,
+                    mode="markers",
+                    marker=dict(size=8, color=blue, symbol="circle", line=dict(color="#ffffff", width=1), opacity=.85),
+                    name="예측 후보",
+                    hovertemplate="예측 후보<extra></extra>",
+                ), row=1, col=1)
 
+    # 백테스트 매수/매도 지점. 검증용 표시.
     b = [p for p in buys if start_idx <= int(p.get("idx", -1)) <= end_idx and int(p.get("idx", -1)) in df.index]
     if b:
         ids = [int(p["idx"]) for p in b]
-        fig.add_trace(go.Scatter(x=ids, y=df.loc[ids, "low"] * 0.94 * mult, mode="markers+text", text=["매수"] * len(ids), textposition="bottom center", marker=dict(symbol="triangle-up", size=14, color=C["green"], line=dict(color="#fff", width=1)), name="매수"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=ids,
+            y=df.loc[ids, "low"] * 0.94 * mult,
+            mode="markers+text",
+            text=["BUY"] * len(ids),
+            textposition="bottom center",
+            marker=dict(symbol="triangle-up", size=15, color=up, line=dict(color="#ffffff", width=1)),
+            textfont=dict(color=up, size=10),
+            name="백테스트 매수",
+        ), row=1, col=1)
     s = [p for p in sells if start_idx <= int(p.get("idx", -1)) <= end_idx and int(p.get("idx", -1)) in df.index]
     if s:
         ids = [int(p["idx"]) for p in s]
-        fig.add_trace(go.Scatter(x=ids, y=df.loc[ids, "high"] * 1.055 * mult, mode="markers+text", text=[p.get("reason", "매도") for p in s], textposition="top center", marker=dict(symbol="triangle-down", size=14, color=C["red"], line=dict(color="#fff", width=1)), name="매도"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=ids,
+            y=df.loc[ids, "high"] * 1.055 * mult,
+            mode="markers+text",
+            text=["SELL"] * len(ids),
+            textposition="top center",
+            marker=dict(symbol="triangle-down", size=15, color=down, line=dict(color="#ffffff", width=1)),
+            textfont=dict(color=down, size=10),
+            name="백테스트 매도",
+        ), row=1, col=1)
 
-    vol_colors = [C["green"] if dfp.loc[i, "close"] >= dfp.loc[i, "open"] else C["red"] for i in dfp.index]
-    fig.add_trace(go.Bar(x=x, y=dfp["volume"], marker=dict(color=vol_colors), opacity=0.55, name="거래량"), row=2, col=1)
-    fig.add_trace(go.Scatter(x=x, y=dfp["volMa20"], line=dict(color="#64748b", width=1.1), name="거래량 평균"), row=2, col=1)
+    vol_colors = [up if dfp.loc[i, "close"] >= dfp.loc[i, "open"] else down for i in dfp.index]
+    fig.add_trace(go.Bar(x=x, y=dfp["volume"], marker=dict(color=vol_colors), opacity=0.52, name="거래량", hovertemplate="거래량 %{y:,.0f}<extra></extra>"), row=2, col=1)
+    if "volMa20" in dfp:
+        fig.add_trace(go.Scatter(x=x, y=dfp["volMa20"], line=dict(color=muted, width=1.2), name="거래량 MA20", hovertemplate="거래량 MA20 %{y:,.0f}<extra></extra>"), row=2, col=1)
 
-    fig.add_trace(go.Scatter(x=x, y=dfp["rsi"], line=dict(color="#db2777", width=1.3), name="RSI"), row=3, col=1)
+    fig.add_trace(go.Scatter(x=x, y=dfp["rsi"], line=dict(color="#f472b6", width=1.45), name="RSI", hovertemplate="RSI %{y:.1f}<extra></extra>"), row=3, col=1)
+    fig.add_hrect(y0=70, y1=100, fillcolor="rgba(239,68,68,.10)", line_width=0, row=3, col=1)
+    fig.add_hrect(y0=0, y1=30, fillcolor="rgba(34,197,94,.10)", line_width=0, row=3, col=1)
     for y in [30, 50, 70]:
-        fig.add_hline(y=y, line_width=0.7, line_dash="dot", line_color="#cbd5e1", row=3, col=1)
+        fig.add_hline(y=y, line_width=0.7, line_dash="dot", line_color=grid, row=3, col=1)
     fig.update_yaxes(range=[0, 100], row=3, col=1)
 
-    hist_colors = [C["green"] if v >= 0 else C["red"] for v in dfp["macd_hist"].fillna(0)]
-    fig.add_trace(go.Bar(x=x, y=dfp["macd_hist"], marker=dict(color=hist_colors), opacity=0.45, name="MACD Hist"), row=4, col=1)
-    fig.add_trace(go.Scatter(x=x, y=dfp["macd"], line=dict(color=C["blue"], width=1.2), name="MACD"), row=4, col=1)
-    fig.add_trace(go.Scatter(x=x, y=dfp["macd_signal"], line=dict(color=C["orange"], width=1.1), name="Signal"), row=4, col=1)
+    hist_colors = [up if v >= 0 else down for v in dfp["macd_hist"].fillna(0)]
+    fig.add_trace(go.Bar(x=x, y=dfp["macd_hist"], marker=dict(color=hist_colors), opacity=0.48, name="MACD Hist"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=x, y=dfp["macd"], line=dict(color=blue, width=1.3), name="MACD"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=x, y=dfp["macd_signal"], line=dict(color=orange, width=1.15), name="Signal"), row=4, col=1)
+    fig.add_hline(y=0, line_width=0.8, line_color=grid, row=4, col=1)
 
     step = max(1, len(dfp) // 8)
-    tickvals = dfp.index.tolist()[::step]
-    ticktext = dfp["date"].astype(str).tolist()[::step]
-    fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext, showgrid=True, gridcolor="#e2e8f0")
-    fig.update_yaxes(showgrid=True, gridcolor="#e2e8f0")
+    tickvals = x[::step]
+    ticktext = dates[::step]
+    for r in range(1, 5):
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            gridcolor=grid,
+            zeroline=False,
+            showspikes=True,
+            spikemode="across",
+            spikesnap="cursor",
+            spikecolor="rgba(226,232,240,.55)",
+            spikethickness=1,
+            row=r,
+            col=1,
+        )
+        fig.update_yaxes(
+            showgrid=True,
+            gridcolor=grid,
+            zeroline=False,
+            showspikes=True,
+            spikecolor="rgba(226,232,240,.55)",
+            tickfont=dict(color=text_color, size=11),
+            titlefont=dict(color=muted, size=11),
+            row=r,
+            col=1,
+        )
+
+    tick = money_tick_settings()
+    fig.update_yaxes(title_text=f"가격({unit})", row=1, col=1, **tick)
+    fig.update_yaxes(title_text="거래량(주/개)", tickformat=".2s", row=2, col=1)
+    fig.update_yaxes(title_text="RSI", tickformat=".0f", row=3, col=1)
+    fig.update_yaxes(title_text="MACD", tickformat=".3f", row=4, col=1)
+    fig.update_xaxes(title_text="날짜", row=4, col=1, titlefont=dict(color=muted, size=11))
+
     fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="#ffffff",
-        height=780,
-        margin=dict(l=8, r=8, t=10, b=8),
+        template="plotly_dark",
+        paper_bgcolor=bg,
+        plot_bgcolor=panel,
+        height=840,
+        margin=dict(l=12, r=16, t=28, b=8),
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
-        legend=dict(orientation="h", y=1.01, x=0, font=dict(size=11)),
-        font=dict(color=C["text"]),
+        dragmode="pan",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.015,
+            xanchor="left",
+            x=0,
+            font=dict(size=11, color=text_color),
+            bgcolor="rgba(15,23,42,.55)",
+            bordercolor="rgba(148,163,184,.22)",
+            borderwidth=1,
+        ),
+        font=dict(family="Pretendard, sans-serif", color=text_color),
+        hoverlabel=dict(bgcolor="#111827", bordercolor="#334155", font=dict(color="#f8fafc", size=12)),
+        title=dict(text="", font=dict(color=text_color)),
+        modebar=dict(bgcolor="rgba(15,23,42,.80)", color=muted, activecolor=blue),
     )
-    tick = money_tick_settings()
-    fig.update_yaxes(title_text=f"가격({money_unit_label()})", row=1, col=1, **tick)
-    fig.update_yaxes(title_text="거래량(주/개)", tickformat=",.2s", row=2, col=1)
-    fig.update_yaxes(title_text="RSI(0~100)", ticksuffix="", tickformat=".0f", row=3, col=1)
-    fig.update_yaxes(title_text="MACD", tickformat=".3f", row=4, col=1)
-    fig.update_xaxes(title_text="날짜", row=4, col=1)
     return fig
-
 
 def make_equity_chart(equity_df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
@@ -1286,10 +1480,6 @@ def make_equity_chart(equity_df: pd.DataFrame) -> go.Figure:
 # ============================================================
 
 st.sidebar.markdown("### 기본 설정")
-if st.sidebar.button("모의투자 초기화", use_container_width=True):
-    reset_portfolio()
-    st.rerun()
-
 currency_mode = st.sidebar.radio("표시 통화", ["달러 ($)", "원 (₩)"], horizontal=True)
 st.session_state.currency = "KRW" if "원" in currency_mode else "USD"
 
@@ -1297,8 +1487,14 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 예측 설정")
 style = st.sidebar.selectbox("예측 스타일", ["안전형", "균형형", "공격형"], index=1)
 forecast_horizon = st.sidebar.selectbox("예측 기간", [3, 5, 10, 20], index=1, format_func=lambda v: f"{v}봉")
-chart_bars = st.sidebar.slider("차트 표시 봉 수", 80, 800, 260, 20, format="%d봉")
+chart_bars = st.sidebar.slider("차트 표시 봉 수", 80, 1200, 300, 20, format="%d봉")
 show_bb = st.sidebar.checkbox("볼린저밴드 표시", value=True)
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 실시간 차트")
+auto_refresh_enabled = st.sidebar.checkbox("장중 자동 새로고침", value=True)
+auto_refresh_seconds = st.sidebar.selectbox("새로고침 간격", [30, 60, 120], index=1, format_func=lambda v: f"{v}초")
+st.sidebar.caption("1분봉·15분봉·30분봉·1시간봉에서 장이 열려 있으면 자동으로 새로고침합니다.")
+st.sidebar.markdown("---")
 use_arima = st.sidebar.checkbox("ARIMA 보조모델 사용", value=False, disabled=not STATSMODELS_AVAILABLE)
 st.sidebar.caption("예측 기간은 몇 개의 봉 뒤를 볼지 뜻합니다. 예: 5봉 = 현재 봉 기준 5개 봉 뒤.")
 
@@ -1596,49 +1792,6 @@ def render_kpis(metrics: Dict, acc: float, acc_n: int):
 
 
 
-def render_manual_trade(asset_type: str, is_coin: bool, symbol: str, name: str, current: float):
-    st.markdown("### 수동 모의투자")
-    share_key = "coin_shares" if is_coin else "stock_shares"
-    balance_key = "coin_balance" if is_coin else "stock_balance"
-    log_key = "coin_trade_log" if is_coin else "stock_trade_log"
-    st.session_state[share_key].setdefault(symbol, 0.0)
-    a, b, c = st.columns([2, 2, 3])
-    a.metric("예수금", fmt_curr(st.session_state[balance_key]))
-    b.metric("보유수량", f"{st.session_state[share_key][symbol]:.4f}")
-    step = 1.0 if is_korean_ticker(symbol) and not is_coin else 0.01
-    with c:
-        amount = st.number_input("수량 (주/개)", min_value=0.0001, value=1.0 if step == 1.0 else 0.1, step=step, format="%.4f", key=f"amt_{asset_type}")
-        st.caption("단위: 주/개")
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("매수", use_container_width=True, key=f"buy_{asset_type}"):
-            total = amount * current
-            if st.session_state[balance_key] >= total:
-                st.session_state[balance_key] -= total
-                st.session_state[share_key][symbol] += amount
-                st.session_state[log_key].append({"시간": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "종목": name, "종류": "매수", "수량": amount, "가격": current, "총금액": total})
-                save_portfolio()
-                st.rerun()
-            else:
-                st.error("잔액 부족")
-    with b2:
-        if st.button("매도", use_container_width=True, key=f"sell_{asset_type}"):
-            if st.session_state[share_key][symbol] >= amount:
-                total = amount * current
-                st.session_state[balance_key] += total
-                st.session_state[share_key][symbol] -= amount
-                st.session_state[log_key].append({"시간": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "종목": name, "종류": "매도", "수량": amount, "가격": current, "총금액": total})
-                save_portfolio()
-                st.rerun()
-            else:
-                st.error("보유 수량 부족")
-    if st.session_state[log_key]:
-        log = pd.DataFrame(st.session_state[log_key])
-        log["가격"] = log["가격"].apply(fmt_curr)
-        log["총금액"] = log["총금액"].apply(fmt_curr)
-        st.dataframe(log.iloc[::-1], use_container_width=True, hide_index=True)
-
-
 def render_asset_page(asset_type: str, is_coin: bool, defaults: List[str], default_text: str):
     label = "코인" if is_coin else "주식"
     st.markdown(f'<div class="card"><p class="title">{label} 분석</p><p class="sub">수학적 모델과 기술적 지표를 결합해 매수 후보를 판단합니다.</p></div>', unsafe_allow_html=True)
@@ -1651,12 +1804,14 @@ def render_asset_page(asset_type: str, is_coin: bool, defaults: List[str], defau
         else:
             user_input = st.text_input("종목명 또는 티커", default_text, key=f"input_{asset_type}")
     with c3:
-        tf = st.selectbox("차트 주기", list(TIMEFRAME_MAP.keys()), index=0, key=f"tf_{asset_type}")
+        tf = st.selectbox("차트 주기", list(TIMEFRAME_MAP.keys()), index=1, key=f"tf_{asset_type}")
     interval, data_range = TIMEFRAME_MAP[tf]
     symbol = search_ticker_by_name(user_input, is_coin)
     if not symbol:
         st.warning("종목을 입력하세요.")
         return
+
+    live_clock = render_live_status(symbol, tf)
 
     with st.spinner("데이터 분석 중..."):
         df, name, market, pred_df, latest, trades, equity, buys, sells, metrics, acc, acc_n = analyze_symbol(symbol, interval, data_range)
@@ -1673,7 +1828,7 @@ def render_asset_page(asset_type: str, is_coin: bool, defaults: List[str], defau
     cls = "up" if diff >= 0 else "down"
     st.markdown(f'''
     <div class="card">
-      <div class="small">{symbol} · {tf} · {cfg.style}</div>
+      <div class="small">{symbol} · {tf} · {cfg.style} · {live_clock.get('label', '')}</div>
       <div class="title">{name}</div>
       <div class="price">{fmt_curr(current)} <span class="{cls}" style="font-size:15px;">{sign}{fmt_curr(diff)} ({sign}{pct:.2f}%)</span></div>
     </div>
@@ -1681,9 +1836,14 @@ def render_asset_page(asset_type: str, is_coin: bool, defaults: List[str], defau
 
     left, right = st.columns([7.3, 2.7])
     with left:
-        st.plotly_chart(make_chart(df, pred_df, buys, sells, chart_bars, show_bb), use_container_width=True, config={"scrollZoom": True})
+        st.markdown('<div class="chart-guide"><b>차트 조작</b> · 마우스 휠 확대/축소 · 드래그 이동 · 우측 상단 도구로 확대 영역 선택 가능 · 1분봉은 장중 자동 갱신을 지원합니다 · BUY/SELL 표시는 백테스트 검증 지점입니다.</div>', unsafe_allow_html=True)
+        st.plotly_chart(
+            make_chart(df, pred_df, buys, sells, chart_bars, show_bb),
+            use_container_width=True,
+            config={"scrollZoom": True, "displayModeBar": True, "responsive": True},
+        )
         render_kpis(metrics, acc, acc_n)
-        st.plotly_chart(make_equity_chart(equity), use_container_width=True)
+        st.plotly_chart(make_equity_chart(equity), use_container_width=True, config={"displayModeBar": True, "responsive": True})
     with right:
         render_signal_card(latest, market)
         render_order_plan(df)
@@ -1702,7 +1862,6 @@ def render_asset_page(asset_type: str, is_coin: bool, defaults: List[str], defau
     else:
         st.info("현재 조건에서는 백테스트 거래가 없습니다. 공격형으로 바꾸거나 기준을 완화해 보세요.")
 
-    render_manual_trade(asset_type, is_coin, symbol, name, current)
 
 
 def render_scanner():
@@ -1721,7 +1880,7 @@ def render_scanner():
         return
 
     max_scan = st.slider("스캔 개수", 1, min(20, len(symbols)), min(8, len(symbols)), format="%d개")
-    tf = st.selectbox("차트 주기", list(TIMEFRAME_MAP.keys()), index=0, key="scan_tf")
+    tf = st.selectbox("차트 주기", list(TIMEFRAME_MAP.keys()), index=1, key="scan_tf")
     interval, data_range = TIMEFRAME_MAP[tf]
     selected_symbols = symbols[:max_scan]
 
@@ -1768,7 +1927,7 @@ def render_scanner():
 # 메인
 # ============================================================
 
-st.markdown('<div class="card"><p class="title">시계열 수학 모델 매수 타점 예측</p><p class="sub">Ridge · Logistic · 비선형 모델 · 선택형 ARIMA · 기술적 지표 · 백테스트 · 리스크 관리</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="card"><p class="title">시계열 수학 모델 매수 타점 예측</p><p class="sub">Ridge · Logistic · 비선형 모델 · 선택형 ARIMA · 1분봉 장중 자동 갱신 · 백테스트 · 리스크 관리</p></div>', unsafe_allow_html=True)
 
 page = st.radio("", ["주식", "코인", "스캐너"], horizontal=True, label_visibility="collapsed")
 
