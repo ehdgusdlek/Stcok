@@ -1392,7 +1392,7 @@ def make_chart(df: pd.DataFrame, pred_df: Optional[pd.DataFrame], buys: List[Dic
             showspikes=True,
             spikecolor="rgba(226,232,240,.55)",
             tickfont=dict(color=text_color, size=11),
-            titlefont=dict(color=muted, size=11),
+            title=dict(font=dict(color=muted, size=11)),
             row=r,
             col=1,
         )
@@ -1402,7 +1402,7 @@ def make_chart(df: pd.DataFrame, pred_df: Optional[pd.DataFrame], buys: List[Dic
     fig.update_yaxes(title_text="거래량(주/개)", tickformat=".2s", row=2, col=1)
     fig.update_yaxes(title_text="RSI", tickformat=".0f", row=3, col=1)
     fig.update_yaxes(title_text="MACD", tickformat=".3f", row=4, col=1)
-    fig.update_xaxes(title_text="날짜", row=4, col=1, titlefont=dict(color=muted, size=11))
+    fig.update_xaxes(title_text="날짜", row=4, col=1, title=dict(font=dict(color=muted, size=11)))
 
     fig.update_layout(
         template="plotly_dark",
